@@ -25,14 +25,15 @@ namespace LispParser
     show (LVList    xs  ) = "(" ++ assert_total (showSequence xs) ++ ")"
     show (LVDotList xs x) = "(" ++ assert_total (showSequence xs) ++ ". " ++ show x ++ ")"
     show (LVInt        n) = show n
-    show (LVStr        s) = "\\" ++ show s ++ "\\"
+    show (LVStr        s) = show s
     show (LVBool   False) = "#f"
     show (LVBool   True ) = "#t"
-    show (LVChar       c) = "#\\" ++ case c of
-                                     ' '  => "space"
-                                     '\t' => "tab"
-                                     '\n' => "newline"
-                                     _    => pack [c]
+    show (LVChar       c) =
+      "#\\" ++ case c of
+                    ' '  => "space"
+                    '\t' => "tab"
+                    '\n' => "newline"
+                    _    => pack [c]
 
   backslashOrDoubleQuote : Parser (NonEmptyList Char)
   backslashOrDoubleQuote = do
@@ -43,19 +44,19 @@ namespace LispParser
   parseChar = do
     char '#'
     char '\\'
-    name <- many1 (letter <|> symbol <|> parens)
+    name <- some (letter <|> symbol <|> parens)
     case name of
          (MkNEList (c :: [] ** _)) => pure $ LVChar c
          (MkNEList (c :: cs ** _)) => case toLower (pack (c :: cs)) of
                                            "space"   => pure $ LVChar ' '
                                            "tab"     => pure $ LVChar '\t'
                                            "newline" => pure $ LVChar '\n'
-                                           _         => never "Can't parse character"
+                                           _         => noParse "Can't parse character"
 
   parseStr : Parser LispV
   parseStr = do
     char '"'
-    xs <- many $ backslashOrDoubleQuote <|> many1 (noneOf (unpack "\\\""))
+    xs <- many $ backslashOrDoubleQuote <|> some (noneOf (unpack "\\\""))
     char '"'
     pure $ LVStr $ pack $ concat $ map neWeaken xs
 
@@ -81,9 +82,9 @@ namespace LispParser
   parseInt : Parser LispV
   parseInt = do
     sign <- oneOf (unpack "+-") <|> pure 'v'
-    xs <- parsePositive . pack . neWeaken <$> many1 digit
+    xs <- parsePositive . pack . neWeaken <$> some digit
     case xs of
-         Nothing => never "Can't parse number"
+         Nothing => noParse "Can't parse number"
          Just n  => pure $ LVInt $ if sign == '-'
                                       then -n
                                       else  n

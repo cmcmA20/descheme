@@ -1,9 +1,11 @@
 module Parser
 
+import Data.List
+
 %default total
 %access public export
 
-namespace NonEmptyList
+namespace Helpers
 
   data NonEmptyList : Type -> Type where
     MkNEList : (xs : List a ** NonEmpty xs) -> NonEmptyList a
@@ -11,8 +13,30 @@ namespace NonEmptyList
   neWeaken : NonEmptyList a -> List a
   neWeaken (MkNEList (xs ** _)) = xs
 
-  neApp : NonEmptyList a -> List a -> NonEmptyList a
-  neApp (MkNEList ((x :: xs) ** _)) ys = MkNEList (x :: (xs ++ ys) ** IsNonEmpty)
+  neLeftApp : NonEmptyList a -> List a -> NonEmptyList a
+  neLeftApp (MkNEList ((x :: xs) ** _)) ys = MkNEList (x :: (xs ++ ys) ** IsNonEmpty)
+
+  neRightApp : List a -> NonEmptyList a -> NonEmptyList a
+  neRightApp []        ys = ys
+  neRightApp (x :: xs) ys = MkNEList (x :: (xs ++ neWeaken ys) ** IsNonEmpty)
+
+  neBothApp : NonEmptyList a -> NonEmptyList a -> NonEmptyList a
+  neBothApp xs ys = neRightApp (neWeaken xs) ys
+
+  data EqTo : {a : Type} -> (t : a) -> Type where
+    MkET : (x : a ** x = t) -> EqTo t
+
+  etWeaken : {t : a} -> EqTo t -> a
+  etWeaken (MkET (x ** _)) = x
+
+  data OneOf : {a : Type} -> List a -> Type where
+    MkOO : (o : a ** Elem o os) -> OneOf os
+
+  ooWeaken : {os : List a} -> OneOf os -> a
+  ooWeaken (MkOO (o ** _)) = o
+
+  eqPromoteToChoice : EqTo t -> OneOf [t]
+  eqPromoteToChoice (MkET (x ** prf)) = MkOO (x ** rewrite sym prf in Here)
 
 namespace Parser
 
@@ -56,13 +80,46 @@ namespace Parser
            Right (r, inp') => parse (f r) inp'
 
   Semigroup a => Semigroup (Parser a) where
-    (<+>) u v = (<+>) <$> u <*> v
+    (<+>) u v = [| u <+> v |]
 
   Monoid a => Monoid (Parser a) where
     neutral = MkParser $ \inp => Right (neutral, inp)
 
-  never : String -> Parser a
-  never err = MkParser $ \_ => Left err
+  optional : Parser a -> Parser (Maybe a)
+  optional u =
+    MkParser $ \inp =>
+    case parse u inp of
+         Left  err       => Right (Nothing, inp )
+         Right (r, inp') => Right (Just r , inp')
+
+  many : Parser a -> Parser (List a)
+  many u = do
+    r <- optional u
+    case r of
+         Nothing => neutral
+         Just x  => [| pure x :: assert_total (many u) |]
+
+  some : Parser a -> Parser (NonEmptyList a)
+  some u = do
+    x  <- u
+    xs <- many u
+    pure $ MkNEList (x :: xs ** IsNonEmpty)
+
+  noParse : String -> Parser a
+  noParse err = MkParser $ \_ => Left err
+
+  infixr 10 <?>
+  (<?>) : Parser a -> String -> Parser a
+  (<?>) u err = u <|> noParse err
+
+  satisfy : (Char -> Bool) -> Parser Char
+  satisfy p =
+    MkParser $ \inp =>
+    case unpack inp of
+         []        => Left "Unexpected EOF"
+         (x :: xs) => case p x of
+                           False => Left $ "Can't match char '" ++ pack [x] ++ "'"
+                           True  => Right (x, pack xs)
 
   eof : Parser ()
   eof =
@@ -72,33 +129,21 @@ namespace Parser
          (x :: _) => Left $ "Expected EOF, got char '" ++ pack [x] ++ "'"
 
   anyChar : Parser Char
-  anyChar =
-    MkParser $ \inp =>
-    case unpack inp of
-         []        => Left "Unexpected EOF"
-         (x :: xs) => Right (x, pack xs)
+  anyChar = satisfy (const True)
 
   char : Char -> Parser Char
-  char c =
-    MkParser $ \inp =>
-    case unpack inp of
-         []        => Left "Unexpected EOF"
-         (x :: xs) => case decEq c x of
-                           No  _ => Left $ "Can't match char '" ++ pack [x] ++ "' with '" ++ pack [c] ++ "'"
-                           Yes _ => Right (x, pack xs)
+  char c = satisfy (c ==)
 
   notChar : Char -> Parser Char
-  notChar c =
-    MkParser $ \inp =>
-    case unpack inp of
-         []        => Left "Unexpected EOF"
-         (x :: xs) => case parse (char c) inp of
-                           Left  _ => Right (x, pack xs)
-                           Right _ => Left $ "Can't match char '" ++ pack [x] ++ "' with '" ++ pack [c] ++ "'"
+  notChar c = satisfy (c /=)
+
+  string : List Char -> Parser (List Char)
+  string = sequence . map char
 
   oneOf : List Char -> Parser Char
   oneOf = choice . map char
 
+  -- FIXME restate in a style of oneOf
   noneOf : List Char -> Parser Char
   noneOf cs =
     MkParser $ \inp =>
@@ -108,22 +153,9 @@ namespace Parser
                            Left  _ => Right (x, pack xs)
                            Right _ => Left $ "Can't match char '" ++ pack [x] ++ "' with one of \"" ++ pack cs ++ "\""
 
-  many : Parser a -> Parser (List a)
-  many u =
-    MkParser $ \inp =>
-    case parse u inp of
-         Left  _         => Right ([], inp)
-         Right (r, inp') => map (\(l, s) => (r :: l, s)) $ assert_total $ parse (many u) inp'
-
-  many1 : Parser a -> Parser (NonEmptyList a)
-  many1 u = do
-    x <- u
-    xs <- many u
-    pure $ MkNEList (x :: xs ** IsNonEmpty)
-
   sepBy1 : Parser a -> Parser sep -> Parser (NonEmptyList a)
   sepBy1 u v = do
-    x <- u
+    x  <- u
     xs <- many (v *> u)
     pure $ MkNEList (x :: xs ** IsNonEmpty)
 
@@ -137,14 +169,10 @@ namespace Parser
   endBy u v = map neWeaken (endBy1 u v) <|> neutral
 
   skipMany : Parser a -> Parser ()
-  skipMany u = do
-    xs <- many u
-    pure ()
+  skipMany u = many u *> pure ()
 
-  skipMany1 : Parser a -> Parser ()
-  skipMany1 u = do
-    x <- u
-    skipMany u
+  skipSome : Parser a -> Parser ()
+  skipSome u = some u *> pure ()
 
   -- Concrete useful parsers
 
@@ -158,19 +186,68 @@ namespace Parser
   parens = oneOf $ unpack "()[]{}"
 
   lower : Parser Char
-  lower = oneOf $ unpack "qwertyuiopasdfghjklzxcvbnm"
+  lower = satisfy isLower
 
   upper : Parser Char
-  upper = oneOf $ unpack "QWERTYUIOPASDFGHJKLZXCVBNM"
+  upper = satisfy isUpper
 
   letter : Parser Char
-  letter = lower <|> upper
+  letter = satisfy isAlpha
 
   digit : Parser Char
-  digit = oneOf $ unpack "0123456789"
-
-  spaces : Parser ()
-  spaces = skipMany1 space
+  digit = satisfy isDigit
 
   alphaNum : Parser Char
-  alphaNum = letter <|> digit
+  alphaNum = satisfy isAlphaNum
+
+  spaces : Parser ()
+  spaces = skipSome space
+
+
+namespace DependentParser
+
+  char' : (c : Char) -> Parser (EqTo c)
+  char' c =
+    MkParser $ \inp =>
+    case unpack inp of
+         []        => Left "Unexpected EOF"
+         (x :: xs) => case (decEq x c) of
+                           Yes prf => Right (MkET (x ** prf), pack xs)
+                           No  _   => Left $ "Can't match char '" ++ pack [x] ++ "'"
+
+  string' : (s : List Char) -> Parser (EqTo s)
+  string' []        = pure $ (MkET ([] ** Refl))
+  string' (c :: cs) = do
+    MkET (x  ** p) <- char' c
+    MkET (xs ** q) <- string' cs
+    pure $ MkET $
+      rewrite sym p in
+      rewrite sym q in
+      (x :: xs ** Refl)
+
+  oneOf' : (cs : List Char) -> Parser (OneOf cs)
+  oneOf' cs =
+    MkParser $ \inp =>
+    case unpack inp of
+         []        => Left "Unexpected EOF"
+         (x :: xs) => case (isElem x cs) of
+                           Yes prf => Right (MkOO (x ** prf), pack xs)
+                           No  _   => Left $ "Can't match char '" ++ pack [x] ++ "'"
+
+  infixr 10 <%>
+  ||| like <|> but preserves restrictions
+  (<%>): Parser (EqTo w) -> Parser (EqTo z) -> Parser (OneOf [w, z])
+  (<%>) u v =
+    MkParser $ \inp =>
+    case parse u inp of
+         Left  _ => case parse v inp of
+                         Left  _ => Left "Can't match both chars" -- FIXME
+                         Right (MkET (x ** prf), inp') => Right (rewrite sym prf in MkOO (x ** There Here), inp')
+         Right (MkET (x ** prf), inp') => Right (rewrite sym prf in MkOO (x ** Here), inp')
+
+
+  -- Too much structure, the order of elements is irrelevant here
+  strangeConsOr : Parser (EqTo w) -> Parser (OneOf zs) -> Parser (OneOf (w :: zs))
+  strangeConsApp : Parser (OneOf ws) -> Parser (OneOf zs) -> Parser (OneOf (ws ++ zs))
+  -- seq' : {s1, s2 : List Char} -> Parser (EqTo s1) -> Parser (EqTo s2) -> 
+
