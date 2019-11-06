@@ -14,6 +14,10 @@ namespace LispEval
   numericBinOp : (Integer -> Integer -> Integer) -> List (LispV) -> LispV
   numericBinOp op params = assert_total $ LVInt $ foldl1 op $ map unpackNum params
 
+  isBoolean : List (LispV) -> LispV
+  isBoolean ((LVBool _) :: []) = LVBool True
+  isBoolean _ = LVBool False
+
   isSymbol : List (LispV) -> LispV
   isSymbol ((LVAtom _) :: []) = LVBool True
   isSymbol _ = LVBool False
@@ -36,7 +40,17 @@ namespace LispEval
 
   stringToSymbol : List (LispV) -> LispV
   stringToSymbol ((LVStr s) :: []) = LVAtom s
-  stringToSymbol _ = LVAtom "undefined"
+  stringToSymbol _ = LVStr "undefined"
+
+  classOf : List (LispV) -> LispV
+  classOf ((LVAtom       _) :: []) = LVStr "Atom"
+  classOf ((LVList    _   ) :: []) = LVStr "List"
+  classOf ((LVDotList _  _) :: []) = LVStr "Dotted List"
+  classOf ((LVInt        _) :: []) = LVStr "Number"
+  classOf ((LVStr        _) :: []) = LVStr "String"
+  classOf ((LVBool       _) :: []) = LVStr "Boolean"
+  classOf ((LVChar       _) :: []) = LVStr "Char"
+  classOf _ = LVStr "undefined"
 
   primitives : List ((String, List (LispV) -> LispV))
   primitives = assert_total $
@@ -47,17 +61,20 @@ namespace LispEval
     , ("quotient", numericBinOp div)
     , ("remainder", numericBinOp mod)
 
-    , ("symbol?", isSymbol)
-    , ("string?", isString)
-    , ("number?", isNumber)
-    , ("char?"  , isChar  )
+    , ("bool"   , isBoolean)
+    , ("symbol?", isSymbol )
+    , ("string?", isString )
+    , ("number?", isNumber )
+    , ("char?"  , isChar   )
 
     , ("symbol->string", symbolToString)
     , ("string->symbol", stringToSymbol)
+
+    , ("class-of", classOf)
     ]
 
   apply : String -> List (LispV) -> LispV
-  apply func args = maybe (LVBool False) (\u => u args) $ lookup func primitives
+  apply func args = maybe (LVStr "undefined") (\u => u args) $ lookup func primitives
 
   eval : LispV -> LispV
   eval (LVList ((LVAtom "quote") :: val :: [])) = val

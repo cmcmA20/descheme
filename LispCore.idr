@@ -1,7 +1,5 @@
 module LispCore
 
-import Data.String
-
 %default total
 %access public export
 

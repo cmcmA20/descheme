@@ -1,5 +1,6 @@
 module LispParser
 
+import Data.List
 import Data.String
 import Parser
 import LispCore
@@ -9,16 +10,17 @@ import LispCore
 
 namespace LispParser
 
-  backslashOrDoubleQuote : Parser (NonEmptyList Char)
-  backslashOrDoubleQuote = do
-    x <- char '\\' *> (oneOf $ unpack "\\\"")
+  escapedBackslashOrDoubleQuote : Parser (NonEmptyList Char)
+  escapedBackslashOrDoubleQuote = do
+    char '\\'
+    x <- oneOf $ unpack "\\\""
     pure $ MkNEList ([x] ** IsNonEmpty)
 
   parseChar : Parser LispV
   parseChar = do
     char '#'
     char '\\'
-    name <- some (letter <|> symbol <|> parens)
+    name <- exactly (char ')') <|> some (alphaNum <|> symbol <|> oneOf (unpack "#\\\"'[]{}("))
     case name of
          (MkNEList (c :: [] ** _)) => pure $ LVChar c
          (MkNEList (c :: cs ** _)) => case toLower (pack (c :: cs)) of
@@ -30,42 +32,48 @@ namespace LispParser
   parseStr : Parser LispV
   parseStr = do
     char '"'
-    xs <- many $ backslashOrDoubleQuote <|> some (noneOf (unpack "\\\""))
+    xs <- many $ escapedBackslashOrDoubleQuote <|> (some $ noneOf $ unpack "\\\"")
     char '"'
     pure $ LVStr $ pack $ concat $ map neWeaken xs
 
-  -- improper cases should be eliminated by restricting the type of parser
   parseBool : Parser LispV
   parseBool = do
     char '#'
-    x <- oneOf $ unpack "tf"
-    pure $ case x of
-                't' => LVBool True
-                _   => LVBool False
+    MkOO (_ ** prf) <- oneOf' $ unpack "tf"
+    pure $ case prf of
+                Here         => LVBool True
+                There Here   => LVBool False
+                There (There _) impossible
 
   parseAtom : Parser LispV
-  parseAtom = do
-    first <- letter <|> symbol
-    rest  <- many (letter <|> digit <|> symbol)
-    let atom = pack $ first :: rest
-    pure $ case atom of
-           "#t" => LVBool True
-           "#f" => LVBool False
-           _    => LVAtom atom
+  parseAtom =
+    [| (LVAtom . pack)
+       [| (letter <|> symbol) :: (many (letter <|> digit <|> symbol)) |]
+    |]
 
   parseInt : Parser LispV
   parseInt = do
-    sign <- oneOf (unpack "+-") <|> pure 'v'
-    xs <- parsePositive . pack . neWeaken <$> some digit
+    msign <- optional $ oneOf' $ unpack "+-"
+    xs    <- parsePositive . pack . neWeaken <$> some digit
     case xs of
          Nothing => noParse "Can't parse number"
-         Just n  => pure $ LVInt $ if sign == '-'
-                                      then -n
-                                      else  n
+         Just n  => pure $ LVInt $ case msign of
+                                        Nothing                => n
+                                        Just (MkOO (_ ** prf)) => case prf of
+                                                                       Here         =>  n
+                                                                       There Here   => -n
+                                                                       There (There _) impossible
 
   mutual
     parseExpr : Parser LispV
-    parseExpr = assert_total $ parseInt <|> parseChar <|> parseAtom <|> parseStr <|> parseBool <|> parseQuoted <|> parseAnyList
+    parseExpr =   assert_total
+              $   parseInt
+              <|> parseStr
+              <|> parseAtom
+              <|> parseBool
+              <|> parseChar
+              <|> parseQuoted
+              <|> parseAnyList
 
     parseQuoted : Parser LispV
     parseQuoted = do
@@ -73,16 +81,11 @@ namespace LispParser
       x <- parseExpr
       pure $ LVList [LVAtom "quote", x]
 
-    parseMaybeDotExpr : Parser (Maybe LispV)
-    parseMaybeDotExpr =
-      Just <$> (char '.' *> spaces *> parseExpr) <|>
-      pure Nothing
-
     parseAnyList : Parser LispV
     parseAnyList = do
       char '('
       xs <- sepBy parseExpr spaces
-      mx <- parseMaybeDotExpr
+      mx <- optional $ char '.' *> spaces *> parseExpr
       char ')'
       pure $ case mx of
                   Nothing => LVList xs

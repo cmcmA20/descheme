@@ -105,6 +105,18 @@ namespace Parser
     xs <- many u
     pure $ MkNEList (x :: xs ** IsNonEmpty)
 
+  exactly : Parser a -> Parser (NonEmptyList a)
+  exactly u = do
+    x <- u
+    pure $ MkNEList ([x] ** IsNonEmpty)
+
+  notFollowedBy : Parser a -> Parser ()
+  notFollowedBy u =
+    MkParser $ \inp =>
+    case parse u inp of
+         Left  _         => Right ((), inp)
+         Right (_, inp') => Left $ "Shouldn't have parsed a token. Rest of the input: " ++ show inp'
+
   noParse : String -> Parser a
   noParse err = MkParser $ \_ => Left err
 
@@ -121,15 +133,11 @@ namespace Parser
                            False => Left $ "Can't match char '" ++ pack [x] ++ "'"
                            True  => Right (x, pack xs)
 
-  eof : Parser ()
-  eof =
-    MkParser $ \inp =>
-    case unpack inp of
-         []       => Right ((), inp)
-         (x :: _) => Left $ "Expected EOF, got char '" ++ pack [x] ++ "'"
-
   anyChar : Parser Char
   anyChar = satisfy (const True)
+
+  eof : Parser ()
+  eof = notFollowedBy anyChar
 
   char : Char -> Parser Char
   char c = satisfy (c ==)
@@ -137,21 +145,14 @@ namespace Parser
   notChar : Char -> Parser Char
   notChar c = satisfy (c /=)
 
+  oneOf : List Char -> Parser Char
+  oneOf cs = satisfy (\c => elem c cs)
+
+  noneOf : List Char -> Parser Char
+  noneOf cs = satisfy (\c => not $ elem c cs)
+
   string : List Char -> Parser (List Char)
   string = sequence . map char
-
-  oneOf : List Char -> Parser Char
-  oneOf = choice . map char
-
-  -- FIXME restate in a style of oneOf
-  noneOf : List Char -> Parser Char
-  noneOf cs =
-    MkParser $ \inp =>
-    case unpack inp of
-         []        => Left "Unexpected EOF"
-         (x :: xs) => case parse (oneOf cs) inp of
-                           Left  _ => Right (x, pack xs)
-                           Right _ => Left $ "Can't match char '" ++ pack [x] ++ "' with one of \"" ++ pack cs ++ "\""
 
   sepBy1 : Parser a -> Parser sep -> Parser (NonEmptyList a)
   sepBy1 u v = do
@@ -244,7 +245,6 @@ namespace DependentParser
                          Left  _ => Left "Can't match both chars" -- FIXME
                          Right (MkET (x ** prf), inp') => Right (rewrite sym prf in MkOO (x ** There Here), inp')
          Right (MkET (x ** prf), inp') => Right (rewrite sym prf in MkOO (x ** Here), inp')
-
 
   -- Too much structure, the order of elements is irrelevant here
   strangeConsOr : Parser (EqTo w) -> Parser (OneOf zs) -> Parser (OneOf (w :: zs))
