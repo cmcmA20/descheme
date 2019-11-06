@@ -2,38 +2,12 @@ module LispParser
 
 import Data.String
 import Parser
+import LispCore
 
 %default total
 %access public export
 
 namespace LispParser
-
-  data LispV : Type where
-    LVAtom    : String -> LispV
-    LVList    : List (LispV) -> LispV
-    LVDotList : List (LispV) -> LispV -> LispV
-    LVInt     : Integer -> LispV
-    LVStr     : String -> LispV
-    LVBool    : Bool -> LispV
-    LVChar    : Char -> LispV
-
-  showSequence : Show a => List a -> String
-  showSequence = concat . intersperse " " . map show
-
-  Show LispV where
-    show (LVAtom       t) = t
-    show (LVList    xs  ) = "(" ++ assert_total (showSequence xs) ++ ")"
-    show (LVDotList xs x) = "(" ++ assert_total (showSequence xs) ++ ". " ++ show x ++ ")"
-    show (LVInt        n) = show n
-    show (LVStr        s) = show s
-    show (LVBool   False) = "#f"
-    show (LVBool   True ) = "#t"
-    show (LVChar       c) =
-      "#\\" ++ case c of
-                    ' '  => "space"
-                    '\t' => "tab"
-                    '\n' => "newline"
-                    _    => pack [c]
 
   backslashOrDoubleQuote : Parser (NonEmptyList Char)
   backslashOrDoubleQuote = do
@@ -114,3 +88,10 @@ namespace LispParser
                   Nothing => LVList xs
                   Just x  => LVDotList xs x
 
+  runParseExpr : String -> Either String LispV
+  runParseExpr inp =
+    case parse parseExpr inp of
+         Left  err       => Left err
+         Right (r, rest) => case unpack rest of
+                                 []        => Right r
+                                 (x :: xs) => Left $ "Trailing garbage: " ++ show rest

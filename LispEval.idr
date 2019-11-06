@@ -1,6 +1,6 @@
 module LispEval
 
-import LispParser
+import LispCore
 
 %default total
 %access public export

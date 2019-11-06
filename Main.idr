@@ -1,6 +1,6 @@
 module Main
 
-import Parser
+import LispCore
 import LispParser
 import LispEval
 
@@ -10,11 +10,9 @@ namespace Main
 
   replBody : String -> String
   replBody str =
-    case parse parseExpr str of
-         Left  err       => "ERROR\n" ++ err ++ "\n"
-         Right (r, rest) => case unpack rest of
-                                 [] => show (eval r) ++ "\n"
-                                 _  => "ERROR\nUnparsed leftover: \"" ++ rest ++ "\"\n"
+    case runParseExpr str of
+         Left  err => "Error: " ++ err ++ "\n"
+         Right res => show (eval res) ++ "\n"
 
   main : IO ()
   main = assert_total $ do
