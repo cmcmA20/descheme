@@ -1,19 +1,23 @@
 module Main
 
 import LispCore
-import LispParser
+import LispPrint
+import LispParse
 import LispEval
 
 %default total
 
 namespace Main
 
-  replBody : String -> String
-  replBody str =
-    case runParseExpr str of
-         Left  err => "Error: " ++ err ++ "\n"
-         Right res => show (eval res) ++ "\n"
+  replBody : () -> String -> Maybe (String, ())
+  replBody () str =
+    case str of
+         "quit" => Nothing
+         ""     => Just ("", ())
+         _      => case runParseExpr str of
+                        Left  err => Just ("Error: " ++ err ++ "\n", ())
+                        Right res => Just (show (eval res) ++ "\n" , ())
 
   main : IO ()
   main = assert_total $ do
-    repl "descheme> " replBody
+    replWith () "descheme> " replBody

@@ -3,35 +3,21 @@ module LispCore
 %default total
 %access public export
 
-namespace LispType
+namespace LispCore
 
-  data LispV : Type where
-    LVAtom    : String -> LispV
-    LVList    : List (LispV) -> LispV
-    LVDotList : List (LispV) -> LispV -> LispV
-    LVInt     : Integer -> LispV
-    LVStr     : String -> LispV
-    LVBool    : Bool -> LispV
-    LVChar    : Char -> LispV
+  mutual
+    data LValue : Type where
+      LVSymbol  : String -> LValue
+      LVList    : List (LValue) -> LValue
+      LVDotList : List (LValue) -> LValue -> LValue
+      LVNum     : LNum -> LValue
+      LVStr     : String -> LValue
+      LVBool    : Bool -> LValue
+      LVChar    : Char -> LValue
 
-
-namespace LispPrint
-
-  showSequence : Show a => List a -> String
-  showSequence = concat . intersperse " " . map show
-
-  Show LispV where
-    show (LVAtom       t) = t
-    show (LVList    xs  ) = "(" ++ assert_total (showSequence xs) ++ ")"
-    show (LVDotList xs x) = "(" ++ assert_total (showSequence xs) ++ ". " ++ show x ++ ")"
-    show (LVInt        n) = show n
-    show (LVStr        s) = show s
-    show (LVBool   False) = "#f"
-    show (LVBool   True ) = "#t"
-    show (LVChar       c) =
-      "#\\" ++ case c of
-                    ' '  => "space"
-                    '\t' => "tab"
-                    '\n' => "newline"
-                    _    => pack [c]
+    -- TODO
+    -- Integer <= Rational <= Real <= Complex
+    -- Exact | Inexact
+    data LNum : Type where
+      LNExact   : Integer -> LNum
 

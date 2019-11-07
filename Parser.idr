@@ -38,6 +38,7 @@ namespace Helpers
   eqPromoteToChoice : EqTo t -> OneOf [t]
   eqPromoteToChoice (MkET (x ** prf)) = MkOO (x ** rewrite sym prf in Here)
 
+
 namespace Parser
 
   ||| Left values are for parse errors
@@ -177,15 +178,6 @@ namespace Parser
 
   -- Concrete useful parsers
 
-  space : Parser Char
-  space = char ' '
-
-  symbol : Parser Char
-  symbol = oneOf $ unpack "!$%&|*+-/:<=?>@^_~"
-
-  parens : Parser Char
-  parens = oneOf $ unpack "()[]{}"
-
   lower : Parser Char
   lower = satisfy isLower
 
@@ -200,9 +192,6 @@ namespace Parser
 
   alphaNum : Parser Char
   alphaNum = satisfy isAlphaNum
-
-  spaces : Parser ()
-  spaces = skipSome space
 
 
 namespace DependentParser
@@ -246,6 +235,7 @@ namespace DependentParser
                          Right (MkET (x ** prf), inp') => Right (rewrite sym prf in MkOO (x ** There Here), inp')
          Right (MkET (x ** prf), inp') => Right (rewrite sym prf in MkOO (x ** Here), inp')
 
+  -- TODO rethink the restrictions in terms of boolean predicates so we can just compute some && and ||
   -- Too much structure, the order of elements is irrelevant here
   strangeConsOr : Parser (EqTo w) -> Parser (OneOf zs) -> Parser (OneOf (w :: zs))
   strangeConsApp : Parser (OneOf ws) -> Parser (OneOf zs) -> Parser (OneOf (ws ++ zs))

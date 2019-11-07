@@ -1,14 +1,21 @@
-module LispParser
+module LispParse
 
 import Data.List
 import Data.String
+
 import Parser
 import LispCore
 
 %default total
 %access public export
 
-namespace LispParser
+namespace LispParse
+
+  spaces : Parser ()
+  spaces = skipSome $ char ' '
+
+  special : Parser Char
+  special = oneOf $ unpack "!&|*+-/:<=?>@^_~"
 
   escapedBackslashOrDoubleQuote : Parser (NonEmptyList Char)
   escapedBackslashOrDoubleQuote = do
@@ -16,11 +23,11 @@ namespace LispParser
     x <- oneOf $ unpack "\\\""
     pure $ MkNEList ([x] ** IsNonEmpty)
 
-  parseChar : Parser LispV
+  parseChar : Parser LValue
   parseChar = do
     char '#'
     char '\\'
-    name <- exactly (char ')') <|> some (alphaNum <|> symbol <|> oneOf (unpack "#\\\"'[]{}("))
+    name <- exactly (oneOf (unpack "#\\\"'[]{}()") <|> special <|> digit) <|> some letter
     case name of
          (MkNEList (c :: [] ** _)) => pure $ LVChar c
          (MkNEList (c :: cs ** _)) => case toLower (pack (c :: cs)) of
@@ -29,14 +36,14 @@ namespace LispParser
                                            "newline" => pure $ LVChar '\n'
                                            _         => noParse "Can't parse character"
 
-  parseStr : Parser LispV
+  parseStr : Parser LValue
   parseStr = do
     char '"'
     xs <- many $ escapedBackslashOrDoubleQuote <|> (some $ noneOf $ unpack "\\\"")
     char '"'
     pure $ LVStr $ pack $ concat $ map neWeaken xs
 
-  parseBool : Parser LispV
+  parseBool : Parser LValue
   parseBool = do
     char '#'
     MkOO (_ ** prf) <- oneOf' $ unpack "tf"
@@ -45,43 +52,58 @@ namespace LispParser
                 There Here   => LVBool False
                 There (There _) impossible
 
-  parseAtom : Parser LispV
+  parseAtom : Parser LValue
   parseAtom =
-    [| (LVAtom . pack)
-       [| (letter <|> symbol) :: (many (letter <|> digit <|> symbol)) |]
+    [| (LVSymbol . pack)
+       [| (letter <|> special) :: (many (letter <|> digit <|> special)) |]
     |]
 
-  parseInt : Parser LispV
-  parseInt = do
+  -- TODO exact/inexact, base modifier, numeric hierarchy
+  parseNum : Parser LValue
+  parseNum = do
     msign <- optional $ oneOf' $ unpack "+-"
     xs    <- parsePositive . pack . neWeaken <$> some digit
     case xs of
          Nothing => noParse "Can't parse number"
-         Just n  => pure $ LVInt $ case msign of
-                                        Nothing                => n
-                                        Just (MkOO (_ ** prf)) => case prf of
-                                                                       Here         =>  n
-                                                                       There Here   => -n
-                                                                       There (There _) impossible
+         Just n  => pure $ LVNum $ LNExact $ case msign of
+                                                  Nothing                => n
+                                                  Just (MkOO (_ ** prf)) => case prf of
+                                                                                 Here         =>  n
+                                                                                 There Here   => -n
+                                                                                 There (There _) impossible
 
   mutual
-    parseExpr : Parser LispV
+    parseExpr : Parser LValue
     parseExpr =   assert_total
-              $   parseInt
+              $   parseNum
               <|> parseStr
               <|> parseAtom
               <|> parseBool
               <|> parseChar
               <|> parseQuoted
+              <|> parseQuasiQuoted
+              <|> parseUnquoted
               <|> parseAnyList
 
-    parseQuoted : Parser LispV
+    parseQuoted : Parser LValue
     parseQuoted = do
       char '\''
       x <- parseExpr
-      pure $ LVList [LVAtom "quote", x]
+      pure $ LVList [LVSymbol "quote", x]
 
-    parseAnyList : Parser LispV
+    parseQuasiQuoted : Parser LValue
+    parseQuasiQuoted = do
+      char '`'
+      x <- parseExpr
+      pure $ LVList [LVSymbol "quasiquote", x]
+
+    parseUnquoted : Parser LValue
+    parseUnquoted = do
+      char ','
+      x <- parseExpr
+      pure $ LVList [LVSymbol "unquote", x]
+
+    parseAnyList : Parser LValue
     parseAnyList = do
       char '('
       xs <- sepBy parseExpr spaces
@@ -91,10 +113,11 @@ namespace LispParser
                   Nothing => LVList xs
                   Just x  => LVDotList xs x
 
-  runParseExpr : String -> Either String LispV
+  runParseExpr : String -> Either String LValue
   runParseExpr inp =
     case parse parseExpr inp of
          Left  err       => Left err
          Right (r, rest) => case unpack rest of
                                  []        => Right r
                                  (x :: xs) => Left $ "Trailing garbage: " ++ show rest
+
