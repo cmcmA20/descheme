@@ -10,6 +10,9 @@ namespace Helpers
   data NonEmptyList : Type -> Type where
     MkNEList : (xs : List a ** NonEmpty xs) -> NonEmptyList a
 
+  -- Functor NonEmptyList where
+  --   map f (MkNEList (x :: xs ** IsNonEmpty)) = MkNEList (f x :: map f xs ** IsNonEmpty)
+
   neWeaken : NonEmptyList a -> List a
   neWeaken (MkNEList (xs ** _)) = xs
 
@@ -22,6 +25,9 @@ namespace Helpers
 
   neBothApp : NonEmptyList a -> NonEmptyList a -> NonEmptyList a
   neBothApp xs ys = neRightApp (neWeaken xs) ys
+
+  Semigroup (NonEmptyList a) where
+    (<+>) = neBothApp
 
   data EqTo : {a : Type} -> (t : a) -> Type where
     MkET : (x : a ** x = t) -> EqTo t
@@ -37,7 +43,6 @@ namespace Helpers
 
   eqPromoteToChoice : EqTo t -> OneOf [t]
   eqPromoteToChoice (MkET (x ** prf)) = MkOO (x ** rewrite sym prf in Here)
-
 
 namespace Parser
 
@@ -86,6 +91,13 @@ namespace Parser
   Monoid a => Monoid (Parser a) where
     neutral = MkParser $ \inp => Right (neutral, inp)
 
+  noParse : String -> Parser a
+  noParse err = MkParser $ \_ => Left err
+
+  infixr 10 <?>
+  (<?>) : Parser a -> String -> Parser a
+  (<?>) u err = u <|> noParse err
+
   optional : Parser a -> Parser (Maybe a)
   optional u =
     MkParser $ \inp =>
@@ -117,13 +129,6 @@ namespace Parser
     case parse u inp of
          Left  _         => Right ((), inp)
          Right (_, inp') => Left $ "Shouldn't have parsed a token. Rest of the input: " ++ show inp'
-
-  noParse : String -> Parser a
-  noParse err = MkParser $ \_ => Left err
-
-  infixr 10 <?>
-  (<?>) : Parser a -> String -> Parser a
-  (<?>) u err = u <|> noParse err
 
   satisfy : (Char -> Bool) -> Parser Char
   satisfy p =
@@ -237,7 +242,7 @@ namespace DependentParser
 
   -- TODO rethink the restrictions in terms of boolean predicates so we can just compute some && and ||
   -- Too much structure, the order of elements is irrelevant here
-  strangeConsOr : Parser (EqTo w) -> Parser (OneOf zs) -> Parser (OneOf (w :: zs))
-  strangeConsApp : Parser (OneOf ws) -> Parser (OneOf zs) -> Parser (OneOf (ws ++ zs))
+  -- strangeConsOr : Parser (EqTo w) -> Parser (OneOf zs) -> Parser (OneOf (w :: zs))
+  -- strangeConsApp : Parser (OneOf ws) -> Parser (OneOf zs) -> Parser (OneOf (ws ++ zs))
   -- seq' : {s1, s2 : List Char} -> Parser (EqTo s1) -> Parser (EqTo s2) -> 
 

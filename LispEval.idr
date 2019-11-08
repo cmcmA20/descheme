@@ -1,6 +1,8 @@
 module LispEval
 
 import Control.ST
+import Data.SortedMap
+
 import LispCore
 
 %default total
@@ -8,32 +10,25 @@ import LispCore
 
 namespace LispEval
 
-  -- Resources to track in eval:
-  -- quasiquote level -- Nat
-  -- environment -- List of bound symbols
+  record LEnv where
+    constructor MkLEnv
+    definedSymbols : SortedMap String LValue
 
-  -- LispEnv : Type
-  -- LispEnv = State (List String)
+  -- LEnv : Type
+  -- LEnv = SortedMap String LValue
 
-  -- data LErr : Type where
-  --   LE : -> LErr
+  defaultEnv : LEnv
+  defaultEnv = MkLEnv empty
 
-  -- data LEvalResult : Type where
-  --   LERFail : LErr -> LEvalResult
-  --   LERSuccess : LValue -> LEvalResult
+  LErr : Type
+  LErr = String
 
-  -- eas : (ql : Var) -> (env : Var) -> LValue -> ST m Integer [ ql ::: State Nat, env ::: LispEnv, err ::: LispErr ]
-  -- eas ql env x = ?eas_rhs
+  LEvalResult : Type
+  LEvalResult = Either LErr LValue
 
-  -- evalInt : ST m Integer []
-  -- evalInt = ?evalInt_rhs
-
-  unpackNum : LValue -> Integer
-  unpackNum (LVNum (LNExact n)) = n
-  unpackNum _ = 0
-
-  numericBinOp : (Integer -> Integer -> Integer) -> List (LValue) -> LValue
-  numericBinOp op params = assert_total $ LVNum $ LNExact $ foldl1 op $ map unpackNum params
+  unpackNum' : LValue -> ST m LEvalResult []
+  unpackNum' (LVNum (LNExactInt n)) = pure $ Right $ LVNum $ LNExactInt n
+  unpackNum' _ = pure $ Left "Number required"
 
   isBoolean : List (LValue) -> LValue
   isBoolean ((LVBool _) :: []) = LVBool True
@@ -64,7 +59,7 @@ namespace LispEval
   stringToSymbol _ = LVStr "undefined"
 
   classOf : List (LValue) -> LValue
-  classOf ((LVSymbol       _) :: []) = LVStr "Atom"
+  classOf ((LVSymbol     _) :: []) = LVStr "Atom"
   classOf ((LVList    _   ) :: []) = LVStr "List"
   classOf ((LVDotList _  _) :: []) = LVStr "Dotted List"
   classOf ((LVNum        _) :: []) = LVStr "Number"
@@ -72,6 +67,13 @@ namespace LispEval
   classOf ((LVBool       _) :: []) = LVStr "Boolean"
   classOf ((LVChar       _) :: []) = LVStr "Char"
   classOf _ = LVStr "undefined"
+
+  unpackNum : LValue -> Integer
+  unpackNum (LVNum (LNExactInt n)) = n
+  unpackNum _ = 0
+
+  numericBinOp : (Integer -> Integer -> Integer) -> List (LValue) -> LValue
+  numericBinOp op params = assert_total $ LVNum $ LNExactInt $ foldl1 op $ map unpackNum params
 
   primitives : List ((String, List (LValue) -> LValue))
   primitives = assert_total $
@@ -97,17 +99,46 @@ namespace LispEval
   apply : String -> List (LValue) -> LValue
   apply func args = maybe (LVStr "undefined") (\u => u args) $ lookup func primitives
 
-  mutual
-    evalUnquotes : LValue -> LValue
-    evalUnquotes (LVList    (LVSymbol "unquote" :: val :: [])) = eval val
-    evalUnquotes (LVList    xs                             ) = LVList $ assert_total $ map evalUnquotes xs
-    evalUnquotes (LVDotList xs x                           ) = LVDotList (assert_total $ map eval xs) $ eval x
-    evalUnquotes val                                         = val
+  eval : LValue -> ST m LEvalResult [env ::: State LEnv, qql ::: State Nat]
+  eval {env} (LVList (LVSymbol "define" :: LVSymbol name :: [x])) = do
+    MkLEnv defs <- read env
+    case !(eval x) of
+         Left  err => pure $ Left err
+         Right val => do
+           write env $ MkLEnv $ insert name val defs
+           pure $ Right $ LVList [] -- FIXME using dependent types to express a fkn placeholder value
 
-    eval : LValue -> LValue
-    eval (LVList (LVSymbol "quote"      :: val :: [])) = val
-    eval (LVList (LVSymbol "quasiquote" :: val :: [])) = evalUnquotes val
-    eval (LVList (LVSymbol "unquote"    :: val :: [])) = LVStr "ERROR: unquote must be within quasiquote"
-    eval (LVList (LVSymbol func         :: args     )) = apply func $ assert_total $ map eval args
-    eval val                                         = val
+  eval (LVList (LVSymbol "quote" :: [x])) = pure $ Right x
+
+  eval {qql} (LVList (LVSymbol "quasiquote" :: [x])) = do
+    update qql S
+    eval x
+
+  eval {qql} (LVList (LVSymbol "unquote" :: [x])) = do
+    n <- read qql
+    case n of
+         Z   => pure $ Left "Unquote only works inside a quasiquote"
+         S k => do
+           write qql k
+           eval x
+
+  -- TODO should track function arity
+  eval {env} (LVList (LVSymbol func :: args)) = do
+    ?whattodo
+
+  eval {env} (LVSymbol x) = do
+    MkLEnv defs <- read env
+    case lookup x defs of
+         Nothing   => pure $ Left "Undefined symbol"
+         Just body => pure $ Right body
+
+  eval (LVNum  ln) = pure $ Right $ LVNum  ln
+  eval (LVChar c ) = pure $ Right $ LVChar c
+  eval (LVStr  s ) = pure $ Right $ LVStr  s
+  eval (LVBool b ) = pure $ Right $ LVBool b
+
+  eval _ = pure $ Left "Not yet implemented"
+
+  --mutual
+    -- eval (LVList (LVSymbol func         :: args     )) = apply func $ assert_total $ map eval args
 

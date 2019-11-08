@@ -1,10 +1,14 @@
 module LispParse
 
 import Data.List
+import Data.Vect
 import Data.String
 
 import Parser
 import LispCore
+
+%hide Data.Vect.Here
+%hide Data.Vect.There
 
 %default total
 %access public export
@@ -65,12 +69,12 @@ namespace LispParse
     xs    <- parsePositive . pack . neWeaken <$> some digit
     case xs of
          Nothing => noParse "Can't parse number"
-         Just n  => pure $ LVNum $ LNExact $ case msign of
-                                                  Nothing                => n
-                                                  Just (MkOO (_ ** prf)) => case prf of
-                                                                                 Here         =>  n
-                                                                                 There Here   => -n
-                                                                                 There (There _) impossible
+         Just n  => pure $ LVNum $ LNExactInt $ case msign of
+                                                     Nothing                => n
+                                                     Just (MkOO (_ ** prf)) => case prf of
+                                                                                    Here         =>  n
+                                                                                    There Here   => -n
+                                                                                    There (There _) impossible
 
   mutual
     parseExpr : Parser LValue
@@ -80,38 +84,31 @@ namespace LispParse
               <|> parseAtom
               <|> parseBool
               <|> parseChar
-              <|> parseQuoted
-              <|> parseQuasiQuoted
-              <|> parseUnquoted
-              <|> parseAnyList
+              <|> parseShortForm "'"  "quote"
+              <|> parseShortForm "`"  "quasiquote"
+              <|> parseShortForm ",@" "unquote-splicing"
+              <|> parseShortForm ","  "unquote"
+              <|> parseShortForm "λ"  "lambda"
+              <|> parseListLike
 
-    parseQuoted : Parser LValue
-    parseQuoted = do
-      char '\''
+    parseShortForm : String -> String -> Parser LValue
+    parseShortForm short long = do
+      string $ unpack short
       x <- parseExpr
-      pure $ LVList [LVSymbol "quote", x]
+      pure $ LVList [LVSymbol long, x]
 
-    parseQuasiQuoted : Parser LValue
-    parseQuasiQuoted = do
-      char '`'
-      x <- parseExpr
-      pure $ LVList [LVSymbol "quasiquote", x]
-
-    parseUnquoted : Parser LValue
-    parseUnquoted = do
-      char ','
-      x <- parseExpr
-      pure $ LVList [LVSymbol "unquote", x]
-
-    parseAnyList : Parser LValue
-    parseAnyList = do
+    parseListLike : Parser LValue
+    parseListLike = do
+      mv <- optional $ char '#'
       char '('
       xs <- sepBy parseExpr spaces
       mx <- optional $ char '.' *> spaces *> parseExpr
       char ')'
-      pure $ case mx of
-                  Nothing => LVList xs
-                  Just x  => LVDotList xs x
+      case (mx, mv) of
+           (Just _ , Just _ ) => noParse "Improper vector"
+           (Just x , Nothing) => pure $ LVDotList xs x
+           (Nothing, Just _ ) => pure $ LVVect $ fromList xs
+           (Nothing, Nothing) => pure $ LVList xs
 
   runParseExpr : String -> Either String LValue
   runParseExpr inp =
