@@ -4,22 +4,22 @@ import Data.SortedMap
 import Data.Fuel
 import Control.ST
 
-import LispCore
-import LispPrint
-import LispParse
-import LispEval
+import Scheme.Core
+import Scheme.Print
+import Scheme.Parse
+import Scheme.Eval
 
 %default total
 
 namespace Main
 
-  replStep : String -> (env, qql : Var) -> ST m (Maybe String) [env ::: State LEnv, qql ::: State Nat]
+  replStep : String -> (env, qql : Var) -> ST m (Maybe String) [env ::: State SEnv, qql ::: State Nat]
   replStep userInput env qql = do
     case userInput of
          "quit" => pure Nothing
          ""     => pure $ Just ""
          "env"  => do
-           MkLEnv defs <- read env
+           MkSEnv defs <- read env
            pure $ Just $ show defs
          _      => case runParseExpr userInput of
                         Left  err => do
@@ -32,7 +32,7 @@ namespace Main
                                  pure $ Just $ show res
 
   -- FIXME Tricking the totality checker is bad, mkay
-  repl2 : ConsoleIO io => (env, qql : Var) -> ST io () [env ::: State LEnv, qql ::: State Nat]
+  repl2 : ConsoleIO io => (env, qql : Var) -> ST io () [env ::: State SEnv, qql ::: State Nat]
   repl2 env qql = do
     putStr "descheme> "
     userInput <- getStr

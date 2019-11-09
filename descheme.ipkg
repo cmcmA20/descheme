@@ -1,0 +1,9 @@
+package descheme
+
+pkgs = contrib
+
+modules = Scheme.Core
+        , Scheme.Print
+        , Scheme.Parse
+        , Scheme.Eval
+
