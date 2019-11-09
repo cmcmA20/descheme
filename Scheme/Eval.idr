@@ -9,23 +9,46 @@ import Scheme.Core
 %default total
 %access public export
 
--- symbol can be either constant
--- or forall n : Nat of fixed arity n
--- or of variable arity
-
--- TODO Add functions of n arguments
-record SEnv where
-  constructor MkSEnv
-  definedSymbols : SortedMap String SExp
-
-defaultEnv : SEnv
-defaultEnv = MkSEnv empty
-
 SErr : Type
 SErr = String
 
 SEvalResult : Type
 SEvalResult = Either SErr SExp
+
+data Arity : Type where
+  AConst : Arity
+  AFixed : Nat -> Arity
+  AVar   : Arity
+
+Show Arity where
+  show AConst     = "AConst"
+  show (AFixed n) = "AFixed " ++ show n
+  show AVar       = "AVar"
+
+data SFun : Arity -> Type where
+  MkSFConst : SExp -> SFun AConst
+  MkSFFixed : (Vect n SExp -> SEvalResult) -> SFun (AFixed n)
+  MkSFVar   : (List SExp -> SEvalResult) -> SFun AVar
+
+Show SExp => Show (SFun ar) where
+  show      (MkSFConst x) = show x
+  show {ar} _             = "#<function " ++ show ar
+
+record SEnv where
+  constructor MkSEnv
+  definedScope : SortedMap String (ar ** SFun ar)
+
+apply : String -> List SExp -> ST m SEvalResult [env ::: State SEnv]
+apply {env} t argList = do
+  MkSEnv defs <- read env
+  case lookup t defs of
+       Nothing                           => pure $ Left "Undefined function"
+       Just (AConst   ** MkSFConst _   ) => pure $ Left $ "Can't apply constant " ++ t
+       Just (AFixed n ** MkSFFixed func) => do
+         case decEq n (length argList) of
+              Yes prf => pure $ func $ replace {P = \u => Vect u SExp} (sym prf) $ fromList argList
+              No  _   => pure $ Left $ "Need " ++ show n ++ " argument(s), got " ++ show (length argList)
+       Just (AVar     ** MkSFVar   func) => pure $ func argList
 
 eval : SExp -> ST m SEvalResult [env ::: State SEnv, qql ::: State Nat]
 
@@ -41,12 +64,13 @@ eval (SENum sn ) = pure $ Right $ SENum sn
 eval {env} {qql} (SESymbol t) = do
   n <- read qql
   case n of
-       -- Not in a quasiquotation, so need to evaluate symbols
+       -- Outside a quasiquote symbols should consult with environment
        Z   => do MkSEnv defs <- read env
                  case lookup t defs of
-                      Nothing   => pure $ Left "Undefined symbol"
-                      Just body => pure $ Right body
-       -- Inside a quasiquotation, symbols evaluate to themselves
+                      Nothing                         => pure $ Left $ "Unbound symbol " ++ t
+                      Just (AConst ** MkSFConst body) => pure $ Right body
+                      Just (ar     ** _             ) => pure $ Left "God bless you" -- FIXME consider arity
+       -- Inside a quasiquote symbols evaluate to themselves
        S _ => pure $ Right $ SESymbol t
 
 -- Special forms
@@ -55,8 +79,15 @@ eval {env} (SECons (SESymbol "define") (SECons (SESymbol name) (SECons x SEUnit)
   case !(eval x) of
        Left  err => pure $ Left err
        Right res => do
-         write env $ MkSEnv $ insert name res defs
+         write env $ MkSEnv $ insert name (AConst ** MkSFConst res) defs
          pure $ Right $ SEUnit
+
+eval {env} (SECons (SESymbol "define") (SECons (SECons (SESymbol name) args) (SECons x SEUnit))) = do
+  MkSEnv defs <- read env
+  case !(eval x) of
+       Left  err => pure $ Left err
+       Right res => do
+         ?definingFunctions
 
 eval (SECons (SESymbol "quote") x) = pure $ Right x
 
@@ -77,97 +108,89 @@ eval {qql} (SECons (SESymbol "unquote") x) = do
                  pure res
 
 -- Generic cons i.e. function application
--- eval (SECons x y) = ?evalConsApply -- TODO
+eval {env} {qql} (SECons x y) = do
+  n <- read qql
+  case n of
+       -- Outside a quasiquote
+       Z   => do
+         case x of
+              SESymbol f => call $ apply f $ fst $ listify y
+              _          => pure $ Left "Not a function"
+       -- Inside a quasiquote evaluate to itself deeply
+       S k => do
+         exr <- eval x
+         eyr <- eval y
+         case (exr, eyr) of
+              (Left xErr, _        ) => pure $ Left xErr
+              (_        , Left yErr) => pure $ Left yErr
+              (Right xr , Right yr ) => pure $ Right $ SECons xr yr
 
 -- Everything else doesn't exist yet
 eval _ = pure $ Left "Not yet implemented"
 
--- unpackNum' : SExp -> ST m LEvalResult []
--- unpackNum' (SENum (LNExactInt n)) = pure $ Right $ SENum $ LNExactInt n
--- unpackNum' _ = pure $ Left "Number required"
+namespace StdLib
 
--- isBoolean : List (SExp) -> SExp
--- isBoolean ((SEBool _) :: []) = SEBool True
--- isBoolean _ = SEBool False
+  -- Type predicates
+  isSymbol : Vect 1 SExp -> SExp
+  isSymbol [SESymbol _] = SEBool True
+  isSymbol _            = SEBool False
 
--- isSymbol : List (SExp) -> SExp
--- isSymbol ((SESymbol _) :: []) = SEBool True
--- isSymbol _ = SEBool False
+  isList : Vect 1 SExp -> SExp
+  isList [x] = case snd $ listify x of
+                    Nothing => SEBool True
+                    _       => SEBool False
 
--- isString : List (SExp) -> SExp
--- isString ((SEStr _) :: []) = SEBool True
--- isString _ = SEBool False
+  isVect : Vect 1 SExp -> SExp
+  isVect [SEVect _] = SEBool True
+  isVect _          = SEBool False
 
--- isNumber : List (SExp) -> SExp
--- isNumber ((SENum _) :: []) = SEBool True
--- isNumber _ = SEBool False
+  isBool : Vect 1 SExp -> SExp
+  isBool [SEBool _] = SEBool True
+  isBool _          = SEBool False
 
--- isChar : List (SExp) -> SExp
--- isChar ((SEChar _) :: []) = SEBool True
--- isChar _ = SEBool False
+  isChar : Vect 1 SExp -> SExp
+  isChar [SEChar _] = SEBool True
+  isChar _          = SEBool False
 
--- symbolToString : List (SExp) -> SExp
--- symbolToString ((SESymbol t) :: []) = SEStr t
--- symbolToString _ = SEStr ""
+  isStr : Vect 1 SExp -> SExp
+  isStr [SEStr _] = SEBool True
+  isStr _         = SEBool False
 
--- stringToSymbol : List (SExp) -> SExp
--- stringToSymbol ((SEStr s) :: []) = SESymbol s
--- stringToSymbol _ = SEStr "undefined"
+  isNum : Vect 1 SExp -> SExp
+  isNum [SENum _] = SEBool True
+  isNum _         = SEBool False
 
--- classOf : List (SExp) -> SExp
--- classOf ((SESymbol     _) :: []) = SEStr "Atom"
--- classOf ((LVList    _   ) :: []) = SEStr "List"
--- classOf ((LVDotList _  _) :: []) = SEStr "Dotted List"
--- classOf ((SENum        _) :: []) = SEStr "Number"
--- classOf ((SEStr        _) :: []) = SEStr "String"
--- classOf ((SEBool       _) :: []) = SEStr "Boolean"
--- classOf ((SEChar       _) :: []) = SEStr "Char"
--- classOf _ = SEStr "undefined"
+  -- String/Symbol conversion
+  symbolToString : Vect 1 SExp -> SEvalResult
+  symbolToString [SESymbol t] = Right $ SEStr t
+  symbolToString _            = Left $ "Expected a symbol"
 
--- unpackNum : SExp -> Integer
--- unpackNum (SENum (LNExactInt n)) = n
--- unpackNum _ = 0
+  stringToSymbol : Vect 1 SExp -> SEvalResult
+  stringToSymbol [SEStr s] = Right $ SESymbol s
+  stringToSymbol _         = Left $ "Expected a string"
 
--- numericBinOp : (Integer -> Integer -> Integer) -> List (SExp) -> SExp
--- numericBinOp op params = assert_total $ SENum $ LNExactInt $ foldl1 op $ map unpackNum params
+  -- Numeric
+  plusBin' : SExp -> SExp -> SEvalResult
+  plusBin' (SENum (SNExactInt x)) (SENum (SNExactInt y)) = Right $ SENum $ SNExactInt $ x + y
+  plusBin' _ _ = Left $ "Expected only numbers"
 
--- primitives : List ((String, List (SExp) -> SExp))
--- primitives = assert_total $
---   [ ("+", numericBinOp (+))
---   , ("-", numericBinOp (-))
---   , ("*", numericBinOp (*))
---   , ("mod", numericBinOp mod)
---   , ("quotient", numericBinOp div)
---   , ("remainder", numericBinOp mod)
+  plusVar : List SExp -> SEvalResult
+  plusVar [] = Right $ SENum $ SNExactInt 0
+  plusVar (x :: xs) = do
+    w <- plusVar xs
+    plusBin' x w
 
---   , ("bool"   , isBoolean)
---   , ("symbol?", isSymbol )
---   , ("string?", isString )
---   , ("number?", isNumber )
---   , ("char?"  , isChar   )
-
---   , ("symbol->string", symbolToString)
---   , ("string->symbol", stringToSymbol)
-
---   , ("class-of", classOf)
---   ]
-
--- apply : String -> List (SExp) -> SExp
--- apply func args = maybe (SEStr "undefined") (\u => u args) $ lookup func primitives
-
--- TODO should track function arity
--- eval {env} {qql} (LVList (SESymbol func :: args)) = do
---   n <- read qql
---   case n of
---        Z   => ?wsad1
---        S k => pure $ Right $ LVList $ SESymbol func :: args
-
--- eval all arguments
--- eval {qql} (LVList []       ) = pure $ Right $ LVList []
--- eval {qql} (LVList (x :: xs)) = do
---   n <- read qql
---   case n of
---        Z   => pure $ Left "Not a function"
---        S k => do rs <- evalIndependent $ assert_total $ map eval $ x :: xs
---                  pure $ Right $ LVList rs
+  defaultEnv : SEnv
+  defaultEnv = MkSEnv $
+    insert "symbol?" (AFixed 1 ** MkSFFixed (pure . isSymbol)) $
+    insert "list?" (AFixed 1 ** MkSFFixed (pure . isList)) $
+    insert "vector?" (AFixed 1 ** MkSFFixed (pure . isVect)) $
+    insert "bool?" (AFixed 1 ** MkSFFixed (pure . isBool)) $
+    insert "char?" (AFixed 1 ** MkSFFixed (pure . isChar)) $
+    insert "string?" (AFixed 1 ** MkSFFixed (pure . isStr)) $
+    insert "number?" (AFixed 1 ** MkSFFixed (pure . isNum)) $
+    insert "symbol->string" (AFixed 1 ** MkSFFixed symbolToString) $
+    insert "string->symbol" (AFixed 1 ** MkSFFixed stringToSymbol) $
+    insert "+" (AVar ** MkSFVar plusVar) $
+    empty
 
